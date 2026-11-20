@@ -11,7 +11,7 @@ st.set_page_config(
 )
 
 S3_FILES_PATH = Path(
-    os.getenv("S3_FILES_MOUNT", "/mnt/s3files")
+    os.getenv("S3_FILES_MOUNT", "/mnt/s3data")
 )
 
 st.title("Amazon S3 Files Manager")
