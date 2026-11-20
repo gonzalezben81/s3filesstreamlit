@@ -1,0 +1,168 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: S3 Destination Bucket & s3File Systems Prerequisites
+Parameters:
+  VPC:
+    Type: AWS::EC2::VPC::Id    
+  SubnetA:
+    Type: AWS::EC2::Subnet::Id
+  SubnetB:
+    Type: AWS::EC2::Subnet::Id
+Resources:
+  DestinationBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${AWS::StackName}-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+  s3FilesIAMRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - elasticfilesystem.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub 'arn:aws:s3files:${AWS::Region}:${AWS::AccountId}:file-system/*'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3FilesClientFullAccess                
+      Path: /
+      Policies:
+        - PolicyName: S3FilesBucketAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: S3BucketPermissions
+                Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:ListBucketVersions
+                Resource: !GetAtt DestinationBucket.Arn
+                Condition:
+                  StringEquals:
+                    aws:ResourceAccount: !Ref AWS::AccountId
+              - Sid: S3ObjectPermissions
+                Effect: Allow
+                Action:
+                  - s3:AbortMultipartUpload
+                  - s3:DeleteObject*
+                  - s3:GetObject*
+                  - s3:List*
+                  - s3:PutObject*
+                Resource: !Sub '${DestinationBucket.Arn}/*'
+                Condition:
+                  StringEquals:
+                    aws:ResourceAccount: !Ref AWS::AccountId
+              - Sid: UseKmsKeyWithS3Files
+                Effect: Allow
+                Action:
+                  - kms:GenerateDataKey
+                  - kms:Encrypt
+                  - kms:Decrypt
+                  - kms:ReEncryptFrom
+                  - kms:ReEncryptTo
+                Condition:
+                  StringLike:
+                    kms:ViaService: !Sub 's3.${AWS::Region}.amazonaws.com'
+                    kms:EncryptionContext:aws:s3:arn:
+                      - !GetAtt DestinationBucket.Arn
+                      - !Sub '${DestinationBucket.Arn}/*'
+                Resource: !Sub 'arn:aws:kms:${AWS::Region}:${AWS::AccountId}:*'
+              - Sid: EventBridgeManage
+                Effect: Allow
+                Action:
+                  - events:DeleteRule
+                  - events:DisableRule
+                  - events:EnableRule
+                  - events:PutRule
+                  - events:PutTargets
+                  - events:RemoveTargets
+                Condition:
+                  StringEquals:
+                    events:ManagedBy: elasticfilesystem.amazonaws.com
+                Resource:
+                  - arn:aws:events:*:*:rule/DO-NOT-DELETE-S3-Files*
+              - Sid: EventBridgeRead
+                Effect: Allow
+                Action:
+                  - events:DescribeRule
+                  - events:ListRuleNamesByTarget
+                  - events:ListRules
+                  - events:ListTargetsByRule
+                Resource:
+                  - arn:aws:events:*:*:rule/*
+                        
+  s3FilesSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: S3 Files mount target security group
+      VpcId: !Ref VPC
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+  s3FileSystem:
+    Type: AWS::S3Files::FileSystem
+    Properties:
+      AcceptBucketWarning: true
+      Bucket: !GetAtt DestinationBucket.Arn
+      RoleArn: !GetAtt s3FilesIAMRole.Arn
+      Tags: 
+        - Key: CreateByStack
+          Value: !Ref AWS::StackName
+  s3MntTargetA:
+    Type: AWS::S3Files::MountTarget
+    DependsOn: s3FileSystem
+    Properties:
+      FileSystemId: !Ref s3FileSystem
+      SecurityGroups:
+        - !Ref s3FilesSecurityGroup
+      SubnetId: !Ref SubnetA
+
+  s3MntTargetB:
+    Type: AWS::S3Files::MountTarget
+    DependsOn: s3FileSystem
+    Properties:
+      FileSystemId: !Ref s3FileSystem
+      SecurityGroups:
+        - !Ref s3FilesSecurityGroup
+      SubnetId: !Ref SubnetB
+Outputs:
+
+  DestinationBucketArn:
+    Description: Destination S3 bucket ARN
+    Value: !GetAtt DestinationBucket.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-DestinationBucketArn'
+
+  S3FileSystemArn:
+    Description: S3 Files filesystem ARN
+    Value: !Ref s3FileSystem
+    Export:
+      Name: !Sub '${AWS::StackName}-S3FileSystemArn'
+
+  S3FilesSecurityGroupId:
+    Description: S3 Files mount target security group
+    Value: !Ref s3FilesSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-S3FilesSecurityGroupId'
+
+  S3MountTargetA:
+    Description: S3 Files mount target A
+    Value: !Ref s3MntTargetA
+
+  S3MountTargetB:
+    Description: S3 Files mount target B
+    Value: !Ref s3MntTargetB     
+  
